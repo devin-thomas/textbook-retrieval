@@ -1,0 +1,46 @@
+{
+  "courses": [
+    {
+      "id": "OS-101",
+      "name": "Operating Systems Fundamentals"
+    },
+    {
+      "id": "SE-200",
+      "name": "Software Engineering Practice"
+    },
+    {
+      "id": "WEB-110",
+      "name": "Web Development Basics"
+    },
+    {
+      "id": "WEB-210",
+      "name": "Intermediate Web Development"
+    }
+  ],
+  "sources": [
+    {
+      "id": "os-concepts",
+      "title": "Operating Systems Concepts",
+      "file_name": "operating-systems-concepts.pdf",
+      "course_ids": ["OS-101"]
+    },
+    {
+      "id": "computer-hardware",
+      "title": "Computer Hardware Basics",
+      "file_name": "computer-hardware-basics.pdf",
+      "course_ids": ["OS-101"]
+    },
+    {
+      "id": "web-development",
+      "title": "Introduction to Web Development",
+      "file_name": "introduction-to-web-development.pdf",
+      "course_ids": ["WEB-110", "WEB-210"]
+    },
+    {
+      "id": "professional-practice",
+      "title": "Professional Software Practice",
+      "file_name": "professional-software-practice.pdf",
+      "course_ids": ["SE-200"]
+    }
+  ]
+}
