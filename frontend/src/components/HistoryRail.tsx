@@ -133,7 +133,7 @@ export function HistoryRail({ conversations, selectedId, mobileOpen, onSelect, o
               <h3>{label}</h3>
               {items.map((item) => (
                 <div className={`history-row ${selectedId === item.id ? "selected" : ""}`} key={item.id}>
-                  <button type="button" className="history-select" onClick={() => { onSelect(item.id); onCloseMobile(); }} aria-current={selectedId === item.id ? "page" : undefined}>
+                  <button type="button" className="history-select" title={item.title} onClick={() => { onSelect(item.id); onCloseMobile(); }} aria-current={selectedId === item.id ? "page" : undefined}>
                     <span>{item.title}</span><time>{new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(new Date(item.updatedAt))}</time>
                   </button>
                   <button type="button" className="history-delete icon-button" onClick={() => onDelete(item)} aria-label={`Delete ${item.title}`}><TrashIcon /></button>

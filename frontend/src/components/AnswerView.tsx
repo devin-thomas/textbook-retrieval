@@ -68,36 +68,38 @@ export function AnswerView({ status, answer, loadingQuestion, loadingStep, onCit
   if (!answer) return null;
 
   return (
-    <article className="answer-article">
+    <>
       {answer.fallback && dismissedFallbackKey !== fallbackKey && <div className="fallback-banner" role="status"><AlertIcon /><span><strong>NVIDIA unavailable</strong> — answered by Ollama</span><button type="button" className="icon-button fallback-dismiss" onClick={() => setDismissedFallbackKey(fallbackKey)} aria-label="Dismiss fallback notice"><CloseIcon /></button></div>}
       {answer.retrievalFallback && <div className="retrieval-fallback-banner" role="status"><AlertIcon /><span><strong>Local model unavailable</strong> — using textbook keyword search for this request.</span></div>}
-      <h1>{answer.question}</h1>
-      {answer.selectAllThatApply && <p className="answer-mode-note" role="status"><strong>Select all that apply mode</strong><span>Multiple correct answers may be included.</span></p>}
-      <hr />
-      {answer.status === "insufficient_evidence" ? (
-        <div className="insufficient-state">
-          <span className="insufficient-mark" aria-hidden="true">?</span>
-          <h2>I couldn’t find support for that in the selected textbooks.</h2>
-          <p>Try rephrasing the question or widening the selected course and textbook scope. No generation provider was called.</p>
-        </div>
-      ) : answer.status === "provider_abstention" ? (
-        <div className="insufficient-state provider-abstention">
-          <span className="insufficient-mark" aria-hidden="true">!</span>
-          <h2>{answer.actualProvider?.toUpperCase() ?? "The selected provider"} could not produce a grounded answer from the retrieved passages.</h2>
-          <p>The provider was called, but its response was an abstention. Try rephrasing the question or inspect the retrieved textbook evidence.</p>
-          {answer.evidence.length > 0 && <button type="button" className="show-evidence" onClick={onShowEvidence}><BookIcon /> Inspect retrieved evidence ({answer.evidence.length}) <ChevronIcon className="chevron-down" /></button>}
-        </div>
-      ) : answer.status === "error" ? (
-        <div className="error-state" role="alert"><AlertIcon /><div><h2>Couldn’t answer</h2><p className="error-message">{answer.error}</p><p>Your question is still here. Check the provider or try again.</p></div></div>
-      ) : (
-        <>
-          <h2 className="sr-only">Answer</h2>
-          <div className="answer-copy"><AnswerText answer={answer} onCitation={onCitation} /></div>
-          <CitationControls answer={answer} onCitation={onCitation} />
-          <div className="provider-result"><span className={`provider-dot ${answer.actualProvider ?? "unknown"}`} /> Answered by <strong>{answer.actualProvider?.toUpperCase() ?? "the selected provider"}</strong>{answer.fallback && <span className="fallback-note"> after automatic fallback</span>}</div>
-          <button type="button" className="show-evidence" onClick={onShowEvidence}><BookIcon /> Show textbook evidence ({answer.evidence.length}) <ChevronIcon className="chevron-down" /></button>
-        </>
-      )}
-    </article>
+      <article className="answer-article">
+        <h1>{answer.question}</h1>
+        {answer.selectAllThatApply && <p className="answer-mode-note" role="status"><strong>Select all that apply mode</strong><span>Multiple correct answers may be included.</span></p>}
+        <hr />
+        {answer.status === "insufficient_evidence" ? (
+          <div className="insufficient-state">
+            <span className="insufficient-mark" aria-hidden="true">?</span>
+            <h2>I couldn’t find support for that in the selected textbooks.</h2>
+            <p>Try rephrasing the question or widening the selected course and textbook scope. No generation provider was called.</p>
+          </div>
+        ) : answer.status === "provider_abstention" ? (
+          <div className="insufficient-state provider-abstention">
+            <span className="insufficient-mark" aria-hidden="true">!</span>
+            <h2>{answer.actualProvider?.toUpperCase() ?? "The selected provider"} could not produce a grounded answer from the retrieved passages.</h2>
+            <p>The provider was called, but its response was an abstention. Try rephrasing the question or inspect the retrieved textbook evidence.</p>
+            {answer.evidence.length > 0 && <button type="button" className="show-evidence" onClick={onShowEvidence}><BookIcon /> Inspect retrieved evidence ({answer.evidence.length}) <ChevronIcon className="chevron-down" /></button>}
+          </div>
+        ) : answer.status === "error" ? (
+          <div className="error-state" role="alert"><AlertIcon /><div><h2>Couldn’t answer</h2><p className="error-message">{answer.error}</p><p>Your question is still here. Check the provider or try again.</p></div></div>
+        ) : (
+          <>
+            <h2 className="sr-only">Answer</h2>
+            <div className="answer-copy"><AnswerText answer={answer} onCitation={onCitation} /></div>
+            <CitationControls answer={answer} onCitation={onCitation} />
+            <div className="provider-result"><span className={`provider-dot ${answer.actualProvider ?? "unknown"}`} /> Answered by <strong>{answer.actualProvider?.toUpperCase() ?? "the selected provider"}</strong>{answer.fallback && <span className="fallback-note"> after automatic fallback</span>}</div>
+            <button type="button" className="show-evidence" onClick={onShowEvidence}><BookIcon /> Show textbook evidence ({answer.evidence.length}) <ChevronIcon className="chevron-down" /></button>
+          </>
+        )}
+      </article>
+    </>
   );
 }
