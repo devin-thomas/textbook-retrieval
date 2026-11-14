@@ -207,3 +207,7 @@ All settings are environment variables, usually set in `.env`. Relative paths ar
 | `RETRIEVAL_FINAL_CHUNKS` | `8` | Chunks sent to the model |
 | `RETRIEVAL_MIN_SEMANTIC_SCORE` | `0.35` (`.env.example` sets `0.18`) | Minimum similarity for a semantic match |
 | `MAX_QUESTION_CHARS` | `4000` | Longest accepted question |
+
+## License
+
+Textbook Desk is released under the MIT License. See [LICENSE](LICENSE) for the full text.

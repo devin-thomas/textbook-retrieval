@@ -33,24 +33,26 @@ export function ScopePopover({ open, sources, courseIds, sourceIds, onCourseIds,
         <div><h3>Choose your books</h3></div>
         <button className="icon-button" onClick={onClose} aria-label="Close filters"><CloseIcon /></button>
       </div>
-      <fieldset>
-        <legend>Courses</legend>
-        {COURSES.map((course) => (
-          <label className="check-row" key={course.id}>
-            <input type="checkbox" checked={courseIds.includes(course.id)} onChange={() => onCourseIds(toggle(courseIds, course.id))} />
-            <span><strong>{course.id.replace("-", " ")}</strong><small>{course.name}</small></span>
-          </label>
-        ))}
-      </fieldset>
-      <fieldset>
-        <legend>Textbooks</legend>
-        {sources.map((source) => (
-          <label className="check-row" key={source.id}>
-            <input type="checkbox" checked={sourceIds.includes(source.id)} onChange={() => onSourceIds(toggle(sourceIds, source.id))} />
-            <span>{source.title}</span>
-          </label>
-        ))}
-      </fieldset>
+      <div className="scope-body">
+        <fieldset>
+          <legend>Courses</legend>
+          {COURSES.map((course) => (
+            <label className="check-row" key={course.id}>
+              <input type="checkbox" checked={courseIds.includes(course.id)} onChange={() => onCourseIds(toggle(courseIds, course.id))} />
+              <span><strong>{course.id.replace("-", " ")}</strong><small>{course.name}</small></span>
+            </label>
+          ))}
+        </fieldset>
+        <fieldset>
+          <legend>Textbooks</legend>
+          {sources.map((source) => (
+            <label className="check-row" key={source.id}>
+              <input type="checkbox" checked={sourceIds.includes(source.id)} onChange={() => onSourceIds(toggle(sourceIds, source.id))} />
+              <span>{source.title}</span>
+            </label>
+          ))}
+        </fieldset>
+      </div>
       <div className="scope-footer">
         <button className="text-button" onClick={() => { onCourseIds([]); onSourceIds([]); }}>Reset to all books</button>
         <button className="button primary" onClick={onClose}>Use this scope</button>
