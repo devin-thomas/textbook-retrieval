@@ -116,8 +116,8 @@ export function HistoryRail({ conversations, selectedId, mobileOpen, onSelect, o
           <span className="history-count" role="status" aria-live="polite">{matchingLabel}</span>
         </div>
         {filtersOpen && (
-          <div className="history-filters" id="history-filter-panel">
-            <div className="history-filter-heading"><span className="eyebrow">Refine history</span><button type="button" className="text-button history-filter-clear" onClick={clearFilters} disabled={!filtersActive}>Clear filters</button></div>
+          <div className="history-filters" id="history-filter-panel" role="group" aria-label="History filters">
+            <div className="history-filter-heading"><button type="button" className="text-button history-filter-clear" onClick={clearFilters} disabled={!filtersActive}>Clear filters</button></div>
             <label className="history-filter-control">Course<select aria-label="Filter history by course" value={filters.courseId} onChange={(event) => setFilters((current) => ({ ...current, courseId: event.target.value }))}><option value="all">All courses</option>{COURSES.map((course) => <option key={course.id} value={course.id}>{course.id.replace("-", " ")}</option>)}</select></label>
             <label className="history-filter-control">Provider<select aria-label="Filter history by provider" value={filters.provider} onChange={(event) => setFilters((current) => ({ ...current, provider: event.target.value as ProviderFilter }))}><option value="all">{providerLabel("all")}</option><option value="auto">Auto</option><option value="nvidia">NVIDIA</option><option value="ollama">Ollama</option></select></label>
             <label className="history-filter-control">Answer mode<select aria-label="Filter history by answer mode" value={filters.mode} onChange={(event) => setFilters((current) => ({ ...current, mode: event.target.value as AnswerModeFilter }))}><option value="all">{modeLabel("all")}</option><option value="single">One answer</option><option value="select_all">Select all that apply</option></select></label>
@@ -127,7 +127,7 @@ export function HistoryRail({ conversations, selectedId, mobileOpen, onSelect, o
         )}
         <div className="history-list">
           {grouped.size === 0 ? (
-            <div className="empty-history"><span aria-hidden="true">◇</span><h3>{hasCriteria ? "No matching questions" : "Your study trail starts here"}</h3><p>{invalidDateRange ? "Adjust the date range to see saved questions." : filtersActive ? "Clear filters or choose a different course, provider, mode, or date range." : search ? "Try another phrase." : "Questions you ask are saved in local history on the app host."}</p>{filtersActive && <button type="button" className="text-button empty-history-action" onClick={clearFilters}>Clear filters</button>}</div>
+            <div className="empty-history"><span aria-hidden="true">◇</span><h3>{hasCriteria ? "No matching questions" : "No saved questions yet"}</h3><p>{invalidDateRange ? "Adjust the date range to see saved questions." : filtersActive ? "Clear filters or choose a different course, provider, mode, or date range." : search ? "Try another phrase." : "Questions you ask are saved in local history on the app host."}</p>{filtersActive && <button type="button" className="text-button empty-history-action" onClick={clearFilters}>Clear filters</button>}</div>
           ) : [...grouped].map(([label, items]) => (
             <section className="history-group" key={label} aria-label={label}>
               <h3>{label}</h3>

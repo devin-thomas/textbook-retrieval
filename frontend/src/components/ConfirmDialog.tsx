@@ -23,7 +23,6 @@ export function ConfirmDialog({ open, title, description, confirmLabel, busy, on
     <div className="dialog-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <section className="confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-description">
         <button className="icon-button dialog-close" onClick={onClose} aria-label="Close dialog"><CloseIcon /></button>
-        <p className="eyebrow">Local history</p>
         <h2 id="confirm-title">{title}</h2>
         <p id="confirm-description">{description}</p>
         <div className="dialog-actions">

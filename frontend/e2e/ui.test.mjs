@@ -254,6 +254,20 @@ async function assertPageHealth(page, viewportName) {
   const undersized = layout.interactive.filter((item) => item.height < 44 && item.tag !== "A");
   assert.deepEqual(undersized, [], `${viewportName}: undersized interactive controls`);
   assert.ok(await page.$('input[aria-label="Select all that apply"]'), `${viewportName}: select-all checkbox exists`);
+  await assertNoDecorativeLabels(page, viewportName);
+}
+
+async function assertNoDecorativeLabels(page, viewportName) {
+  const offenders = await page.evaluate(() => [...document.querySelectorAll("body *")]
+    .filter((element) => {
+      const style = getComputedStyle(element);
+      if (style.display === "none" || style.visibility === "hidden") return false;
+      const hasOwnText = [...element.childNodes].some((node) => node.nodeType === Node.TEXT_NODE && node.textContent.trim());
+      if (!hasOwnText) return false;
+      return element.classList.contains("eyebrow") || style.textTransform === "uppercase" || parseFloat(style.letterSpacing) > 0;
+    })
+    .map((element) => `${element.tagName.toLowerCase()}.${element.className}: ${element.textContent.trim().slice(0, 40)}`));
+  assert.deepEqual(offenders, [], `${viewportName}: uppercase, letter-spaced or eyebrow labels`);
 }
 
 async function loadApp(page, viewportName, viewport) {
@@ -293,9 +307,7 @@ async function runHistoryFlow(page, viewportName, isMobile) {
     await search.fill("semantic");
     assert.equal(await page.$$eval(".history-select", (items) => items.length), 1, `${viewportName}: history search filters results`);
     await search.click();
-    await page.keyboard.down("Control");
-    await page.keyboard.press("A");
-    await page.keyboard.up("Control");
+    await page.$eval('input[aria-label="Find a question"]', (element) => element.select());
     await page.keyboard.press("Backspace");
     await page.waitForFunction(() => document.querySelector('input[aria-label="Find a question"]')?.value === "");
     await page.waitForFunction(() => document.querySelectorAll(".history-select").length === 3);
@@ -324,6 +336,7 @@ async function runHistoryFlow(page, viewportName, isMobile) {
   await page.click('button.history-select');
   if (isMobile) {
     await page.waitForSelector(".history-rail.mobile-open", { hidden: true });
+    await page.waitForFunction(() => (document.querySelector(".history-rail")?.getBoundingClientRect().right ?? 1) <= 0);
     await page.locator('button[aria-label="Open history"]').click();
     await page.waitForSelector(".history-rail.mobile-open");
   }
@@ -353,6 +366,7 @@ async function runScopeFlow(page, viewportName) {
   await page.waitForSelector('[role="dialog"][aria-label="Choose textbook scope"]');
   const scopeCount = await page.$$eval('[role="dialog"] input[type="checkbox"]', (items) => items.length);
   assert.ok(scopeCount >= 4, `${viewportName}: scope lists the four configured textbooks`);
+  await assertNoDecorativeLabels(page, viewportName);
   await page.click('button[aria-label="Close filters"]');
   assert.equal(await page.$('[role="dialog"][aria-label="Choose textbook scope"]'), null, `${viewportName}: scope dialog closes`);
 }
@@ -379,6 +393,7 @@ async function runSelectAllFlow(page, viewportName, mockState) {
   }));
   assert.ok(postAnswerLayout.scrollWidth <= postAnswerLayout.viewportWidth + 1, `${viewportName}: no overflow after evidence opens`);
   assert.equal(postAnswerLayout.evidenceVisible, true, `${viewportName}: evidence opens after answered query`);
+  await assertNoDecorativeLabels(page, viewportName);
   if (windowIsMobile(page)) {
     assert.equal(postAnswerLayout.evidenceExpanded, false, `${viewportName}: mobile evidence sheet starts collapsed`);
     await page.click('button[aria-label="Expand evidence"]');

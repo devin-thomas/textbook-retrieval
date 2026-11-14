@@ -39,6 +39,25 @@ describe("Textbook Desk", () => {
     expect(screen.queryByText("Local model online")).not.toBeInTheDocument();
   });
 
+  it("labels regions with headings and legends instead of decorative eyebrow labels", async () => {
+    mockApi(undefined, [{ id: "conv-1", title: "Virtual memory", updated_at: "2026-08-24T14:00:00Z" }]);
+    const user = userEvent.setup();
+    const { container } = render(<App />);
+    expect(screen.getByRole("heading", { level: 1, name: "Ask your textbooks" })).toBeInTheDocument();
+    expect(screen.getByText(/^Try asking “What makes a professional commitment\?”/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Choose textbook scope/ }));
+    const scope = screen.getByRole("dialog", { name: "Choose textbook scope" });
+    expect(within(scope).getByRole("group", { name: "Courses" })).toBeInTheDocument();
+    expect(within(scope).getByRole("group", { name: "Textbooks" })).toBeInTheDocument();
+    await user.click(await screen.findByRole("button", { name: "Filters" }));
+    expect(screen.getByRole("group", { name: "History filters" })).toBeInTheDocument();
+    expect(screen.queryByText("Refine history")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Clear history/ }));
+    expect(screen.getByRole("alertdialog", { name: "Clear all question history?" })).toBeInTheDocument();
+    expect(screen.queryByText("Local history")).not.toBeInTheDocument();
+    expect(container.querySelector(".eyebrow")).toBeNull();
+  });
+
   it("submits the chosen provider and displays cited textbook evidence", async () => {
     const fetchMock = mockApi({
       status: "answered",
@@ -135,7 +154,8 @@ describe("Textbook Desk", () => {
     const user = userEvent.setup();
     render(<App />);
     await user.click(await screen.findByRole("button", { name: /^Virtual memory/ }));
-    expect(await screen.findByRole("heading", { name: "Nvidia is temporarily unavailable for this question." })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Couldn’t answer" })).toBeInTheDocument();
+    expect(screen.getByText("Nvidia is temporarily unavailable for this question.")).toBeInTheDocument();
     expect(screen.queryByText(/Answered by/)).not.toBeInTheDocument();
   });
 
@@ -180,7 +200,7 @@ describe("Textbook Desk", () => {
     render(<App />);
     await user.type(screen.getByPlaceholderText("Ask your textbooks…"), "Explain the passage");
     await user.click(screen.getByRole("button", { name: "Ask question" }));
-    expect(await screen.findByText("Provider did not answer")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: /NVIDIA could not produce a grounded answer/ })).toBeInTheDocument();
     expect(screen.getByText(/The provider was called/)).toBeInTheDocument();
     expect(screen.queryByText(/No generation provider was called/)).not.toBeInTheDocument();
   });
