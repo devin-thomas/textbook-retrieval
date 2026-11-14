@@ -1010,7 +1010,15 @@ const auditStates = [
   { name: "error", queryStatus: 503, setup: async (page) => ask(page, ordinaryQuestion, ".error-state") },
   { name: "long-answer", answer: veryLongAnswer, setup: async (page) => ask(page, ordinaryQuestion, ".provider-result") },
   { name: "long-answer-evidence-expanded", answer: veryLongAnswer, setup: async (page) => { await ask(page, ordinaryQuestion, ".provider-result"); await expandEvidence(page); }, layer: phoneSheet(".evidence-panel") },
-  { name: "long-question", setup: async (page) => ask(page, longQuestion, ".provider-result") },
+  {
+    name: "long-question",
+    setup: async (page) => {
+      await ask(page, longQuestion, ".provider-result");
+      // A long question must not turn into a heading that fills the screen.
+      const share = await page.evaluate(() => document.querySelector(".answer-article h1").getBoundingClientRect().height / window.innerHeight);
+      assert.ok(share <= 0.4, `long question heading takes ${Math.round(share * 100)}% of the viewport height`);
+    },
+  },
   { name: "many-citations", answer: manyCitationsAnswer, setup: async (page) => ask(page, ordinaryQuestion, ".provider-result") },
   { name: "many-citations-evidence-expanded", answer: manyCitationsAnswer, setup: async (page) => { await ask(page, ordinaryQuestion, ".provider-result"); await expandEvidence(page); }, layer: phoneSheet(".evidence-panel") },
   { name: "saved-question", setup: async (page) => { await openHistory(page); await page.click("button.history-select"); await page.waitForFunction(() => document.querySelector(".answer-article h1")?.textContent?.includes("What is virtual memory?")); } },

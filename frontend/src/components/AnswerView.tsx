@@ -41,6 +41,14 @@ function CitationControls({ answer, onCitation }: { answer: Answer; onCitation: 
   );
 }
 
+/** Long questions get a smaller heading so they do not fill a phone screen. */
+function questionSize(question: string): string | undefined {
+  if (question.length > 320) return "question-very-long";
+  if (question.length > 180) return "question-long";
+  if (question.length > 90) return "question-medium";
+  return undefined;
+}
+
 export function AnswerView({ status, answer, loadingQuestion, loadingStep, onCitation, onShowEvidence }: AnswerViewProps) {
   const [dismissedFallbackKey, setDismissedFallbackKey] = useState<string>();
   const fallbackKey = answer?.fallback ? answer.messageId ?? `${answer.conversationId ?? ""}:${answer.question}:${answer.text}` : "";
@@ -56,7 +64,7 @@ export function AnswerView({ status, answer, loadingQuestion, loadingStep, onCit
 
   if (status === "loading") return (
     <article className="answer-article" aria-live="polite">
-      <h1>{loadingQuestion}</h1><hr />
+      <h1 className={questionSize(loadingQuestion)}>{loadingQuestion}</h1><hr />
       <div className="loading-answer">
         <div className="loading-symbol" aria-hidden="true"><span /><span /><span /></div>
         <h2>{loadingStep}</h2>
@@ -72,7 +80,7 @@ export function AnswerView({ status, answer, loadingQuestion, loadingStep, onCit
       {answer.fallback && dismissedFallbackKey !== fallbackKey && <div className="fallback-banner" role="status"><AlertIcon /><span><strong>NVIDIA unavailable</strong> — answered by Ollama</span><button type="button" className="icon-button fallback-dismiss" onClick={() => setDismissedFallbackKey(fallbackKey)} aria-label="Dismiss fallback notice"><CloseIcon /></button></div>}
       {answer.retrievalFallback && <div className="retrieval-fallback-banner" role="status"><AlertIcon /><span><strong>Local model unavailable</strong> — using textbook keyword search for this request.</span></div>}
       <article className="answer-article">
-        <h1>{answer.question}</h1>
+        <h1 className={questionSize(answer.question)}>{answer.question}</h1>
         {answer.selectAllThatApply && <p className="answer-mode-note" role="status"><strong>Select all that apply mode</strong><span>Multiple correct answers may be included.</span></p>}
         <hr />
         {answer.status === "insufficient_evidence" ? (
