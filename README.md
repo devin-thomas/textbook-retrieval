@@ -175,7 +175,13 @@ Browser layout tests with Puppeteer start their own Vite server and use a mocked
 npm run test:e2e
 ```
 
-Screenshots go to the system temp folder, or to `PUPPETEER_ARTIFACT_DIR` if set.
+Screenshots go to the system temp folder, or to `PUPPETEER_ARTIFACT_DIR` if set. Each one is taken after CSS transitions have finished.
+
+The browser tests include a layout audit. For every screen state (empty, loading, answered, evidence expanded, insufficient evidence, provider abstention, error, history drawer, book picker, confirm dialogs and so on) at every phone and desktop size, it checks from element rectangles that nothing is hidden behind a fixed layer, that open sheets, dialogs and drawers cover the page completely, that nothing scrolls sideways, and that text stays inside its boxes. Optional environment variables:
+
+- `AUDIT_REPORT=1` lists every audit finding instead of stopping at the first.
+- `AUDIT_SHOTS_DIR=<folder>` saves a screenshot of every audited state, at the start and the end of its scroll.
+- `E2E_ONLY=<viewport name>` runs one viewport, for example `phone-390x844`.
 
 PowerShell script tests (Windows PowerShell 5.1 or PowerShell 7):
 

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { type Ref, useEffect, useState } from "react";
 import { pdfUrl } from "../api";
 import { BookIcon, ChevronIcon, CloseIcon, ExternalIcon } from "../icons";
 import type { Evidence } from "../types";
@@ -7,6 +7,8 @@ interface EvidencePanelProps {
   evidence: Evidence[];
   activeEvidence?: Evidence;
   mobileExpanded: boolean;
+  modal?: boolean;
+  panelRef?: Ref<HTMLElement>;
   onMobileExpanded: (expanded: boolean) => void;
   onActiveEvidence: (evidence: Evidence) => void;
   onCloseDesktop: () => void;
@@ -22,7 +24,7 @@ function ScoreDetail({ evidence }: { evidence: Evidence }) {
   return <span>{scores.map(([label, value]) => `${label} ${value.toFixed(3)}`).join(" · ")}</span>;
 }
 
-export function EvidencePanel({ evidence, activeEvidence, mobileExpanded, onMobileExpanded, onActiveEvidence, onCloseDesktop }: EvidencePanelProps) {
+export function EvidencePanel({ evidence, activeEvidence, mobileExpanded, modal, panelRef, onMobileExpanded, onActiveEvidence, onCloseDesktop }: EvidencePanelProps) {
   const [tab, setTab] = useState<"evidence" | "page">("evidence");
   const [expandedId, setExpandedId] = useState<string>();
 
@@ -37,12 +39,12 @@ export function EvidencePanel({ evidence, activeEvidence, mobileExpanded, onMobi
   };
 
   return (
-    <aside className={`evidence-panel ${mobileExpanded ? "mobile-expanded" : ""}`} aria-label="Textbook evidence">
+    <aside ref={panelRef} tabIndex={-1} className={`evidence-panel ${mobileExpanded ? "mobile-expanded" : ""}`} aria-label="Textbook evidence" role={modal ? "dialog" : undefined} aria-modal={modal ? true : undefined}>
       <button className="sheet-handle mobile-only" onClick={() => onMobileExpanded(!mobileExpanded)} aria-label={mobileExpanded ? "Collapse evidence" : "Expand evidence"}><span /></button>
       <div className="evidence-heading">
         <h2><BookIcon /> Textbook evidence <span>({evidence.length})</span></h2>
         <button className="icon-button desktop-close" onClick={onCloseDesktop} aria-label="Close evidence"><CloseIcon /></button>
-        <button className="icon-button mobile-only" onClick={() => onMobileExpanded(!mobileExpanded)} aria-label={mobileExpanded ? "Collapse evidence" : "Expand evidence"}><ChevronIcon className={mobileExpanded ? "chevron-up" : "chevron-down"} /></button>
+        <button className="icon-button mobile-only" onClick={() => onMobileExpanded(!mobileExpanded)} aria-label={mobileExpanded ? "Collapse evidence" : "Expand evidence"}>{mobileExpanded ? <CloseIcon /> : <ChevronIcon className="chevron-down" />}</button>
       </div>
       <div className="evidence-tabs" role="tablist">
         <button role="tab" aria-selected={tab === "evidence"} onClick={() => setTab("evidence")}>Evidence</button>

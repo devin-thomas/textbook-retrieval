@@ -170,7 +170,7 @@ function jsonResponse(body) {
   return { status: 200, contentType: "application/json", body: JSON.stringify(body) };
 }
 
-async function installApiMocks(page, { history = historicalConversations, answer = selectedAnswer } = {}) {
+async function installApiMocks(page, { history = historicalConversations, answer = selectedAnswer, query } = {}) {
   let lastQueryBody;
   let queryCount = 0;
   await page.setRequestInterception(true);
@@ -201,6 +201,11 @@ async function installApiMocks(page, { history = historicalConversations, answer
     if (pathName === "/textbooks/api/query" && request.method() === "POST") {
       queryCount += 1;
       lastQueryBody = JSON.parse(request.postData() ?? "{}");
+      if (query) {
+        const result = await query(lastQueryBody);
+        await request.respond({ status: result.status ?? 200, contentType: "application/json", body: JSON.stringify(result.body) }).catch(() => undefined);
+        return;
+      }
       await request.respond(jsonResponse(answer));
       return;
     }
@@ -209,7 +214,7 @@ async function installApiMocks(page, { history = historicalConversations, answer
       return;
     }
     if (/^\/textbooks\/api\/sources\/[^/]+\/pdf$/.test(pathName)) {
-      await request.respond({ status: 200, contentType: "application/pdf", body: "%PDF-1.4\n% textbook test fixture\n" });
+      await request.respond({ status: 200, contentType: "application/pdf", body: "%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 300 400]/Contents 4 0 R/Resources<</Font<</F1 5 0 R>>>>>>endobj\n4 0 obj<</Length 42>>stream\nBT /F1 18 Tf 30 350 Td (Sample page) Tj ET\nendstream endobj\n5 0 obj<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>endobj\ntrailer<</Root 1 0 R/Size 6>>\n%%EOF\n" });
       return;
     }
     await request.continue();
@@ -251,6 +256,31 @@ async function waitForVite(server) {
     await delay(200);
   }
   throw new Error(`Vite did not become ready: ${lastError}\n${server.__output()}`);
+}
+
+// Wait until every finite CSS transition and animation has finished and two frames
+// have been painted, so a saved image always shows the final state.
+async function settle(page) {
+  await page.evaluate(async () => {
+    const finite = () => document.getAnimations().filter((animation) => {
+      const timing = animation.effect?.getComputedTiming?.();
+      return timing && Number.isFinite(timing.endTime) && animation.playState !== "finished";
+    });
+    for (let round = 0; round < 20 && finite().length; round += 1) {
+      await Promise.all(finite().map((animation) => animation.finished.catch(() => undefined)));
+    }
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  });
+  // An embedded page (the PDF viewer) renders after the frame loads.
+  if (await page.$("iframe")) {
+    for (const frame of page.frames().slice(1)) await frame.waitForSelector("body", { timeout: 5000 }).catch(() => undefined);
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+}
+
+async function shot(page, file) {
+  await settle(page);
+  await page.screenshot({ path: path.join(artifactDir, file), fullPage: false });
 }
 
 async function assertPageHealth(page, viewportName) {
@@ -375,11 +405,11 @@ async function runHistoryFlow(page, viewportName, isMobile) {
     await page.waitForSelector(".history-rail.mobile-open");
   }
   assert.equal(await page.$eval('button.history-select[aria-current="page"] span', (element) => element.textContent?.trim()), "Why use semantic HTML?", `${viewportName}: filtered selection stays active`);
-  await page.screenshot({ path: path.join(artifactDir, `${viewportName}-history-filtered.png`), fullPage: false });
+  await shot(page, `${viewportName}-history-filtered.png`);
   await page.select('select[aria-label="Filter history by course"]', "OS-101");
   await page.waitForSelector(".empty-history");
   assert.match(await page.$eval(".empty-history p", (element) => element.textContent ?? ""), /Clear filters or choose a different course/);
-  await page.screenshot({ path: path.join(artifactDir, `${viewportName}-history-empty.png`), fullPage: false });
+  await shot(page, `${viewportName}-history-empty.png`);
   await page.locator(".history-filters .history-filter-clear").click();
   await page.waitForFunction(() => document.querySelectorAll(".history-select").length === 3);
   assert.equal(await page.$eval('button.history-select[aria-current="page"] span', (element) => element.textContent?.trim()), "Why use semantic HTML?", `${viewportName}: clearing filters preserves selected question`);
@@ -597,7 +627,7 @@ async function assertAnswerClearsEvidenceSheet(page, label) {
   await page.waitForSelector(".evidence-panel");
   await page.waitForSelector(".provider-result");
   const measure = await page.evaluate(() => {
-    const pane = document.querySelector(".answer-pane");
+    const pane = document.querySelector(".answer-scroll");
     pane.scrollTop = pane.scrollHeight;
     const box = (element) => {
       const rect = element.getBoundingClientRect();
@@ -641,10 +671,522 @@ async function runPhoneLayoutFlow(browser, label, viewport) {
     await assertScopeSheetFlow(page, label);
     await assertHistoryDrawerFlow(page, label);
     await assertAnswerClearsEvidenceSheet(page, label);
-    await page.screenshot({ path: path.join(artifactDir, `${label}-layout-answer-end.png`), fullPage: false });
+    await shot(page, `${label}-layout-answer-end.png`);
     // The picker also has to stay on top of the evidence sheet once an answer is showing.
     await assertScopeSheetFlow(page, `${label} after an answer`);
     assert.deepEqual(problems, [], `${label}: layout flow console and HTTP health`);
+  } finally {
+    await page.close();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Layout audit. One general helper checks a screen state from element
+// rectangles and hit tests, and is called for every state at every viewport.
+//
+// For the page, or for the open layer (sheet, dialog, drawer or popover) when
+// the state has one, it checks that:
+//  - every control and every line of text can be seen unclipped and uncovered
+//    at some scroll position of its own container (so nothing sits behind the
+//    top bar, composer, evidence sheet or drawer footer with no way to reach it);
+//  - a layer that covers the page does so completely, with nothing of the page
+//    showing through, and a dialog or drawer has a dimmed backdrop over the rest;
+//  - there is no horizontal scrolling anywhere;
+//  - text stays inside its own box and inside every box that clips it.
+// ---------------------------------------------------------------------------
+
+function auditInPage(spec) {
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const violations = [];
+  const add = (message) => { if (!violations.includes(message)) violations.push(message); };
+  const label = (element) => {
+    const classes = typeof element.className === "string" && element.className.trim() ? `.${element.className.trim().split(/\s+/).join(".")}` : "";
+    const text = (element.getAttribute("aria-label") || element.textContent || "").replace(/\s+/g, " ").trim().slice(0, 40);
+    return `${element.tagName.toLowerCase()}${classes}${text ? ` "${text}"` : ""}`;
+  };
+  const skippedTags = new Set(["SCRIPT", "STYLE", "OPTION", "OPTGROUP", "NOSCRIPT", "TITLE", "HEAD", "META", "LINK"]);
+  const isVisible = (element) => {
+    if (skippedTags.has(element.tagName)) return false;
+    const style = getComputedStyle(element);
+    if (style.display === "none" || style.visibility === "hidden") return false;
+    const rect = element.getBoundingClientRect();
+    return rect.width > 1 && rect.height > 1;
+  };
+  const hitAt = (x, y) => (x >= 0 && y >= 0 && x < vw && y < vh ? document.elementFromPoint(x, y) : null);
+  const alpha = (color) => {
+    const channels = color.match(/[\d.]+/g)?.map(Number) ?? [0, 0, 0, 0];
+    return channels.length === 4 ? channels[3] : 1;
+  };
+
+  const layer = spec.layer ? document.querySelector(spec.layer.selector) : null;
+  if (spec.layer && !layer) {
+    add(`the ${spec.layer.kind} ${spec.layer.selector} is not on the page`);
+    return violations;
+  }
+  const root = layer ?? document.body;
+
+  // ---- the open layer --------------------------------------------------
+  if (layer) {
+    const rect = layer.getBoundingClientRect();
+    const inside = (x, y) => { const hit = hitAt(x, y); return Boolean(hit && layer.contains(hit)); };
+    const grid = (box, inset) => [0, 0.5, 1].flatMap((fx) => [0, 0.25, 0.5, 0.75, 1].map((fy) => [box.left + inset + (box.width - 2 * inset) * fx, box.top + inset + (box.height - 2 * inset) * fy]));
+    const backdropOf = () => spec.layer.backdrop ? document.querySelector(spec.layer.backdrop) : null;
+    const backdropCovers = () => {
+      const backdrop = backdropOf();
+      if (!backdrop) { add(`the ${spec.layer.kind} has no backdrop (${spec.layer.backdrop})`); return; }
+      const box = backdrop.getBoundingClientRect();
+      if (box.left > 0.5 || box.top > 0.5 || box.right < vw - 0.5 || box.bottom < vh - 0.5) add(`the backdrop does not cover the whole viewport (${Math.round(box.left)},${Math.round(box.top)} to ${Math.round(box.right)},${Math.round(box.bottom)} in ${vw}x${vh})`);
+      if (alpha(getComputedStyle(backdrop).backgroundColor) < 0.2) add("the backdrop is not dimmed");
+      for (const [x, y] of [[1, 1], [vw - 2, 1], [1, vh - 2], [vw - 2, vh - 2], [vw / 2, 1], [vw / 2, vh - 2]]) {
+        const hit = hitAt(x, y);
+        if (!hit || !(backdrop.contains(hit) || layer.contains(hit))) add(`page content shows at the viewport edge (${Math.round(x)},${Math.round(y)}) beside the ${spec.layer.kind}: ${hit ? label(hit) : "nothing"}`);
+      }
+    };
+    if (rect.left < -0.5 || rect.top < -0.5 || rect.right > vw + 0.5 || rect.bottom > vh + 0.5) add(`the ${spec.layer.kind} is not inside the viewport (${Math.round(rect.left)},${Math.round(rect.top)} to ${Math.round(rect.right)},${Math.round(rect.bottom)} in ${vw}x${vh})`);
+    if (spec.layer.kind === "sheet") {
+      if (rect.left > 0.5 || rect.top > 0.5 || rect.right < vw - 0.5 || rect.bottom < vh - 0.5) add(`the sheet does not cover the page completely (${Math.round(rect.left)},${Math.round(rect.top)} to ${Math.round(rect.right)},${Math.round(rect.bottom)} in ${vw}x${vh})`);
+      for (const [x, y] of grid({ left: 0, top: 0, width: vw, height: vh }, 1)) {
+        if (!inside(x, y)) { add(`page content shows through the sheet at ${Math.round(x)},${Math.round(y)}: ${(hitAt(x, y) && label(hitAt(x, y))) || "nothing"}`); break; }
+      }
+    } else if (spec.layer.kind === "popover") {
+      for (const [x, y] of grid(rect, 2)) {
+        if (!inside(x, y)) { add(`page content shows through the popover at ${Math.round(x)},${Math.round(y)}: ${(hitAt(x, y) && label(hitAt(x, y))) || "nothing"}`); break; }
+      }
+      if (alpha(getComputedStyle(layer).backgroundColor) < 1) add("the popover background is not solid");
+    } else if (spec.layer.kind === "dialog") {
+      backdropCovers();
+      for (const [x, y] of grid(rect, 2)) {
+        if (!inside(x, y)) { add(`something covers the dialog at ${Math.round(x)},${Math.round(y)}: ${(hitAt(x, y) && label(hitAt(x, y))) || "nothing"}`); break; }
+      }
+    } else if (spec.layer.kind === "drawer") {
+      backdropCovers();
+      if (rect.top > 0.5 || rect.bottom < vh - 0.5) add(`the drawer is not full height (${Math.round(rect.top)} to ${Math.round(rect.bottom)} in ${vh})`);
+      for (const [x, y] of grid(rect, 2)) {
+        if (!inside(x, y)) { add(`something covers the drawer at ${Math.round(x)},${Math.round(y)}: ${(hitAt(x, y) && label(hitAt(x, y))) || "nothing"}`); break; }
+      }
+    }
+  }
+
+  // ---- no horizontal scrolling ------------------------------------------
+  const docWidth = Math.max(document.documentElement.scrollWidth, document.body.scrollWidth);
+  if (docWidth > vw + 1) add(`the page scrolls horizontally (${docWidth} > ${vw})`);
+  if (window.scrollX !== 0) add("the page is scrolled sideways");
+  for (const element of document.querySelectorAll("*")) {
+    if (!isVisible(element) || ["INPUT", "SELECT", "TEXTAREA", "IFRAME", "HTML", "BODY"].includes(element.tagName)) continue;
+    const style = getComputedStyle(element);
+    if ((style.overflowX === "auto" || style.overflowX === "scroll") && element.scrollWidth > element.clientWidth + 1) add(`${label(element)} scrolls horizontally (${element.scrollWidth} > ${element.clientWidth})`);
+  }
+
+  // ---- fixed layers over scrolling content --------------------------------
+  // Content that scrolls underneath a fixed layer must be hidden cleanly by a solid
+  // layer; through a translucent one it shows as text colliding with text.
+  const scrollAreas = [...root.querySelectorAll("*")].filter((element) => {
+    const style = getComputedStyle(element);
+    return (style.overflowY === "auto" || style.overflowY === "scroll") && element.scrollHeight > element.clientHeight + 1 && isVisible(element);
+  });
+  for (const fixed of root.querySelectorAll("*")) {
+    if (!isVisible(fixed) || !["fixed", "sticky"].includes(getComputedStyle(fixed).position)) continue;
+    if (spec.layer && fixed === layer) continue;
+    const solid = alpha(getComputedStyle(fixed).backgroundColor) === 1;
+    const box = fixed.getBoundingClientRect();
+    for (const area of scrollAreas) {
+      if (fixed.contains(area)) continue;
+      const areaBox = area.getBoundingClientRect();
+      const overlap = Math.min(box.right, areaBox.right) - Math.max(box.left, areaBox.left) > 2 && Math.min(box.bottom, areaBox.bottom) - Math.max(box.top, areaBox.top) > 2;
+      if (overlap && !solid) add(`${label(fixed)} is a ${getComputedStyle(fixed).position} layer that is not solid and sits over the scrolling area ${label(area)}`);
+    }
+  }
+
+  // ---- items: controls and lines of text ---------------------------------
+  const controlSelector = 'button, a[href], input, select, textarea, [role="tab"], iframe';
+  const items = [];
+  for (const element of root.querySelectorAll(controlSelector)) if (isVisible(element)) items.push({ element, kind: "control" });
+  for (const element of root.querySelectorAll("*")) {
+    if (!isVisible(element)) continue;
+    if ([...element.childNodes].some((node) => node.nodeType === Node.TEXT_NODE && node.textContent.trim())) items.push({ element, kind: "text" });
+  }
+  const pointsOf = (item) => {
+    const { element } = item;
+    if (item.kind === "control") {
+      const rect = element.getBoundingClientRect();
+      const at = (from, size, fraction) => Math.min(Math.max(from + size * fraction, from + 2), from + size - 2);
+      return [0.1, 0.5, 0.9].flatMap((fx) => [0.1, 0.5, 0.9].map((fy) => [at(rect.left, rect.width, fx), at(rect.top, rect.height, fy)]));
+    }
+    const points = [];
+    // Text that is cut off with an ellipsis on purpose is only checked where it is shown.
+    let shown = null;
+    for (let ancestor = element; ancestor && ancestor !== document.body; ancestor = ancestor.parentElement) {
+      if (getComputedStyle(ancestor).textOverflow === "ellipsis") { shown = ancestor.getBoundingClientRect(); break; }
+    }
+    for (const node of element.childNodes) {
+      if (node.nodeType !== Node.TEXT_NODE || !node.textContent.trim()) continue;
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      for (const rect of [...range.getClientRects()].slice(0, 80)) {
+        if (rect.width < 1 || rect.height < 1) continue;
+        for (const fraction of [0.15, 0.5, 0.85]) {
+          const x = rect.left + rect.width * fraction;
+          const y = rect.top + rect.height / 2;
+          points.push([x, y, Boolean(shown) && (x < shown.left || x > shown.right || y < shown.top || y > shown.bottom)]);
+        }
+      }
+    }
+    return points;
+  };
+  const seen = items.map(() => []);
+  const sweep = () => items.forEach((item, index) => {
+    pointsOf(item).forEach(([x, y, skip], pointIndex) => {
+      if (skip) seen[index][pointIndex] = true;
+      if (seen[index][pointIndex]) return;
+      const hit = hitAt(x, y);
+      if (hit && (item.element === hit || item.element.contains(hit) || hit.contains(item.element))) seen[index][pointIndex] = true;
+    });
+  });
+  const scrollers = [...root.querySelectorAll("*"), root].filter((element) => {
+    const style = getComputedStyle(element);
+    return (style.overflowY === "auto" || style.overflowY === "scroll") && element.scrollHeight > element.clientHeight + 1 && isVisible(element);
+  });
+  const origins = scrollers.map((element) => element.scrollTop);
+  sweep();
+  for (const scroller of scrollers) {
+    const maxTop = scroller.scrollHeight - scroller.clientHeight;
+    const step = Math.max(24, Math.floor(scroller.clientHeight * 0.4));
+    const stops = [];
+    for (let top = 0; top < maxTop; top += step) stops.push(top);
+    stops.push(maxTop);
+    for (const top of stops) { scroller.scrollTop = top; sweep(); }
+  }
+  scrollers.forEach((scroller, index) => { scroller.scrollTop = spec.finish === "end" ? scroller.scrollHeight : origins[index]; });
+  const unreachable = [];
+  items.forEach((item, index) => {
+    const total = pointsOf(item).length;
+    const missed = Array.from({ length: total }, (_, pointIndex) => pointIndex).filter((pointIndex) => !seen[index][pointIndex]).length;
+    if (missed > 0) unreachable.push(`${label(item.element)} (${missed} of ${total} sample points)`);
+  });
+  unreachable.slice(0, 12).forEach((entry) => add(`hidden behind another layer or clipped, with no way to scroll it into view: ${entry}`));
+  if (unreachable.length > 12) add(`... and ${unreachable.length - 12} more hidden items`);
+
+  // ---- text stays inside its boxes ---------------------------------------
+  const clipsText = (style, axis) => (axis === "x" ? style.overflowX : style.overflowY) !== "visible";
+  for (const item of items) {
+    if (item.kind !== "text") continue;
+    const { element } = item;
+    let truncatesByDesign = false;
+    for (let ancestor = element; ancestor && ancestor !== document.body; ancestor = ancestor.parentElement) {
+      const style = getComputedStyle(ancestor);
+      if (style.textOverflow === "ellipsis") { truncatesByDesign = true; break; }
+    }
+    if (truncatesByDesign) continue;
+    let block = element;
+    while (block.parentElement && getComputedStyle(block).display === "inline") block = block.parentElement;
+    const blockRect = block.getBoundingClientRect();
+    const limits = { x: null, y: null };
+    for (const axis of ["x", "y"]) {
+      for (let ancestor = element; ancestor; ancestor = ancestor.parentElement) {
+        const style = getComputedStyle(ancestor);
+        if (!clipsText(style, axis)) continue;
+        const scrolls = (axis === "x" ? style.overflowX : style.overflowY) === "auto" || (axis === "x" ? style.overflowX : style.overflowY) === "scroll";
+        if (!scrolls) {
+          const whole = ancestor === document.body || ancestor === document.documentElement;
+          limits[axis] = whole ? { start: 0, end: axis === "x" ? vw : vh } : { start: axis === "x" ? ancestor.getBoundingClientRect().left : ancestor.getBoundingClientRect().top, end: axis === "x" ? ancestor.getBoundingClientRect().right : ancestor.getBoundingClientRect().bottom };
+        }
+        break;
+      }
+    }
+    for (const node of element.childNodes) {
+      if (node.nodeType !== Node.TEXT_NODE || !node.textContent.trim()) continue;
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      for (const rect of range.getClientRects()) {
+        if (rect.width < 1 || rect.height < 1) continue;
+        if (rect.right > blockRect.right + 1.5 || rect.left < blockRect.left - 1.5) add(`text runs outside its own box: ${label(element)}`);
+        const slack = Math.max(1.5, rect.height * 0.35);
+        if (element.tagName !== "SPAN" && (rect.bottom > blockRect.bottom + slack || rect.top < blockRect.top - slack)) add(`text runs outside its own box (vertically): ${label(element)}`);
+        if (limits.x && (rect.left < limits.x.start - 1 || rect.right > limits.x.end + 1)) add(`text is clipped sideways by its container: ${label(element)}`);
+        if (limits.y && (rect.top < limits.y.start - slack || rect.bottom > limits.y.end + slack)) add(`text is clipped vertically by its container: ${label(element)}`);
+      }
+    }
+  }
+  return violations;
+}
+
+// ---- audit fixtures --------------------------------------------------------
+
+const manyEvidence = Array.from({ length: 9 }, (_, index) => {
+  const source = sources.sources[index % sources.sources.length];
+  return {
+    id: `chunk-many-${index + 1}`,
+    source_id: source.id,
+    source_title: source.title,
+    physical_page: 20 + index * 7,
+    page_label: String(18 + index * 7),
+    excerpt: `Generic passage ${index + 1}. It explains the idea in a few plain sentences, so that the card has more than one line of body copy to wrap on a narrow screen.`,
+    rank: index + 1,
+    fused_score: 0.9 - index * 0.05,
+  };
+});
+
+const manyCitationsAnswer = {
+  ...selectedAnswer,
+  answer: `Several ideas apply to this question. ${manyEvidence.map((_, index) => `[${index + 1}]`).join(" ")}`,
+  select_all_that_apply: false,
+  conversation_id: "new-many-citations",
+  citations: manyEvidence.map((item, index) => ({ id: String(index + 1), evidence_id: item.id, source_id: item.source_id, source_title: item.source_title, physical_page: item.physical_page, page_label: item.page_label })),
+  evidence: manyEvidence,
+};
+
+const veryLongAnswer = {
+  ...longAnswer,
+  answer: Array.from({ length: 14 }, (_, index) => `Paragraph ${index + 1}. The operating system keeps a table of pages for each process and loads a page only when the process touches it. [${(index % 2) + 1}] When memory is short it writes a rarely used page back to disk and reuses the frame.`).join("\n\n"),
+  conversation_id: "new-very-long-answer",
+};
+
+const fallbackAnswer = { ...longAnswer, fallback_used: true, retrieval_fallback_used: true, conversation_id: "new-fallback" };
+const abstentionAnswer = { status: "abstained", answer: "", actual_provider: "nvidia", fallback_used: false, retrieval_fallback_used: false, select_all_that_apply: false, conversation_id: "new-abstention", citations: [], evidence };
+const insufficientAnswer = { status: "insufficient_evidence", answer: "", fallback_used: false, retrieval_fallback_used: false, select_all_that_apply: false, conversation_id: "new-insufficient", citations: [], evidence: [] };
+
+const ordinaryQuestion = "How does virtual memory work?";
+const longQuestion = "Explain in as much detail as you can how a modern operating system decides which pages of a running program stay in physical memory, which are written back to disk, and what happens to the program when it touches a page that is no longer resident, with a worked example of one fault from start to finish and a note on https://example.com/reference/with/a-very-long-path/that-never-breaks/0123456789/abcdefghij/klmnopqrst in case it matters.";
+
+const gated = () => {
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  return { release, query: async () => { await gate; return { body: longAnswer }; } };
+};
+
+async function typeQuestion(page, value) {
+  await page.$eval('textarea[placeholder="Ask your textbooks…"]', (element, next) => {
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+    setter.call(element, next);
+    element.dispatchEvent(new Event("input", { bubbles: true }));
+  }, value);
+}
+
+async function ask(page, question, waitFor) {
+  await typeQuestion(page, question);
+  await page.click('button[aria-label="Ask question"]');
+  await page.waitForSelector(waitFor);
+}
+
+const isPhonePage = (page) => page.viewport().isMobile === true;
+
+async function openHistory(page) {
+  if (isPhonePage(page)) {
+    await page.click('button[aria-label="Open history"]');
+    await page.waitForSelector(".history-rail.mobile-open");
+    await settle(page);
+  }
+}
+
+async function expandEvidence(page) {
+  if (isPhonePage(page)) {
+    await page.click('button.sheet-handle[aria-label="Expand evidence"]');
+    await page.waitForSelector(".evidence-panel.mobile-expanded");
+  }
+}
+
+async function openEvidencePage(page) {
+  await expandEvidence(page);
+  await page.click(".open-page");
+  await page.waitForSelector(".pdf-view");
+}
+
+const phoneSheet = (selector) => (phone) => (phone ? { selector, kind: "sheet" } : null);
+
+// Every screen state the app has. `setup` leaves the page in the state;
+// `layer` names the sheet, dialog, drawer or popover that is open in it.
+const auditStates = [
+  { name: "empty", setup: async () => {} },
+  { name: "loading", gate: true, setup: async (page) => { await typeQuestion(page, ordinaryQuestion); await page.click('button[aria-label="Ask question"]'); await page.waitForSelector(".loading-answer"); } },
+  { name: "answered-evidence-collapsed", setup: async (page) => ask(page, ordinaryQuestion, ".provider-result") },
+  { name: "answered-evidence-expanded", setup: async (page) => { await ask(page, ordinaryQuestion, ".provider-result"); await expandEvidence(page); }, layer: phoneSheet(".evidence-panel") },
+  { name: "evidence-page-view", setup: async (page) => { await ask(page, ordinaryQuestion, ".provider-result"); await openEvidencePage(page); }, layer: phoneSheet(".evidence-panel") },
+  { name: "select-all-answer", answer: { ...longAnswer, select_all_that_apply: true }, setup: async (page) => ask(page, ordinaryQuestion, ".answer-mode-note") },
+  { name: "fallback-banners", answer: fallbackAnswer, setup: async (page) => ask(page, ordinaryQuestion, ".retrieval-fallback-banner") },
+  { name: "insufficient-evidence", answer: insufficientAnswer, setup: async (page) => ask(page, ordinaryQuestion, ".insufficient-state") },
+  { name: "provider-abstention", answer: abstentionAnswer, setup: async (page) => ask(page, ordinaryQuestion, ".provider-abstention") },
+  { name: "provider-abstention-evidence-expanded", answer: abstentionAnswer, setup: async (page) => { await ask(page, ordinaryQuestion, ".provider-abstention"); await expandEvidence(page); }, layer: phoneSheet(".evidence-panel") },
+  { name: "error", queryStatus: 503, setup: async (page) => ask(page, ordinaryQuestion, ".error-state") },
+  { name: "long-answer", answer: veryLongAnswer, setup: async (page) => ask(page, ordinaryQuestion, ".provider-result") },
+  { name: "long-answer-evidence-expanded", answer: veryLongAnswer, setup: async (page) => { await ask(page, ordinaryQuestion, ".provider-result"); await expandEvidence(page); }, layer: phoneSheet(".evidence-panel") },
+  {
+    name: "long-question",
+    setup: async (page) => {
+      await ask(page, longQuestion, ".provider-result");
+      // A long question must not turn into a heading that fills the screen.
+      const share = await page.evaluate(() => document.querySelector(".answer-article h1").getBoundingClientRect().height / window.innerHeight);
+      assert.ok(share <= 0.4, `long question heading takes ${Math.round(share * 100)}% of the viewport height`);
+    },
+  },
+  { name: "many-citations", answer: manyCitationsAnswer, setup: async (page) => ask(page, ordinaryQuestion, ".provider-result") },
+  { name: "many-citations-evidence-expanded", answer: manyCitationsAnswer, setup: async (page) => { await ask(page, ordinaryQuestion, ".provider-result"); await expandEvidence(page); }, layer: phoneSheet(".evidence-panel") },
+  { name: "saved-question", setup: async (page) => { await openHistory(page); await page.click("button.history-select"); await page.waitForFunction(() => document.querySelector(".answer-article h1")?.textContent?.includes("What is virtual memory?")); } },
+  { name: "history-open-few-rows", history: historicalConversations, setup: openHistory, layer: (phone) => (phone ? { selector: ".history-rail.mobile-open", kind: "drawer", backdrop: ".drawer-backdrop" } : null) },
+  { name: "history-open-many-rows", setup: openHistory, layer: (phone) => (phone ? { selector: ".history-rail.mobile-open", kind: "drawer", backdrop: ".drawer-backdrop" } : null) },
+  { name: "history-open-filters", setup: async (page) => { await openHistory(page); await page.click("button.history-filter-toggle"); await page.waitForSelector("#history-filter-panel"); }, layer: (phone) => (phone ? { selector: ".history-rail.mobile-open", kind: "drawer", backdrop: ".drawer-backdrop" } : null) },
+  { name: "history-open-no-matches", setup: async (page) => { await openHistory(page); await page.click("button.history-filter-toggle"); await page.select('select[aria-label="Filter history by course"]', "WEB-210"); await page.waitForSelector(".empty-history"); }, layer: (phone) => (phone ? { selector: ".history-rail.mobile-open", kind: "drawer", backdrop: ".drawer-backdrop" } : null) },
+  { name: "book-picker", setup: async (page) => { await page.click("button.scope-button"); await page.waitForSelector(scopeSheetSelector); }, layer: (phone) => ({ selector: scopeSheetSelector, kind: phone ? "sheet" : "popover" }) },
+  { name: "confirm-clear-all", setup: async (page) => { await openHistory(page); await page.click("button.clear-history"); await page.waitForSelector(".confirm-dialog"); }, layer: () => ({ selector: ".confirm-dialog", kind: "dialog", backdrop: ".dialog-backdrop" }) },
+  { name: "confirm-delete-one", setup: async (page) => { await openHistory(page); await page.hover(".history-row"); await page.click(".history-row .history-delete"); await page.waitForSelector(".confirm-dialog"); }, layer: () => ({ selector: ".confirm-dialog", kind: "dialog", backdrop: ".dialog-backdrop" }) },
+];
+
+async function violationsFor(page, spec) {
+  await settle(page);
+  return page.evaluate(auditInPage, spec);
+}
+
+const auditReportOnly = process.env.AUDIT_REPORT === "1";
+const auditShotsDir = process.env.AUDIT_SHOTS_DIR ? path.resolve(process.env.AUDIT_SHOTS_DIR) : undefined;
+const auditFindings = [];
+
+async function runAuditState(browser, viewportName, viewport, state) {
+  const page = await browser.newPage();
+  const problems = [];
+  page.on("console", (message) => { if (message.type() === "error" && !/status of 503/.test(message.text())) problems.push(message.text()); });
+  page.on("pageerror", (error) => problems.push(error.message));
+  let gate;
+  try {
+    gate = state.gate ? gated() : undefined;
+    const query = gate?.query ?? (state.queryStatus
+      ? async () => ({ status: state.queryStatus, body: { error: { message: "The answer service is not responding." } } })
+      : state.answer ? async () => ({ body: state.answer }) : undefined);
+    await installApiMocks(page, { history: state.history ?? phoneLayoutHistory, answer: longAnswer, query });
+    await page.setViewport(viewport);
+    await page.goto(appUrl, { waitUntil: "domcontentloaded" });
+    await page.waitForSelector('textarea[placeholder="Ask your textbooks…"]');
+    await page.waitForFunction((count) => document.querySelectorAll(".history-select").length >= count, {}, (state.history ?? phoneLayoutHistory).length);
+    await page.evaluate(() => document.fonts?.ready);
+    try {
+      await state.setup(page);
+    } catch (error) {
+      if (!auditReportOnly) throw error;
+      auditFindings.push(`${viewportName} / ${state.name}: could not reach the state: ${String(error.message).split("\n")[0]}`);
+      return;
+    }
+    const phone = viewport.isMobile === true;
+    const layer = state.layer ? state.layer(phone) : null;
+    const found = await violationsFor(page, { layer, finish: "start" });
+    const where = `${viewportName} / ${state.name}`;
+    if (auditShotsDir) {
+      await settle(page);
+      await page.screenshot({ path: path.join(auditShotsDir, `complete-${viewportName}-${state.name}.png`), fullPage: false });
+      const scrolled = await page.evaluate(() => {
+        let moved = false;
+        for (const element of document.querySelectorAll("*")) {
+          const style = getComputedStyle(element);
+          const rect = element.getBoundingClientRect();
+          if ((style.overflowY === "auto" || style.overflowY === "scroll") && style.visibility !== "hidden" && rect.width > 1 && element.scrollHeight > element.clientHeight + 1) { element.scrollTop = element.scrollHeight; moved = true; }
+        }
+        return moved;
+      });
+      if (scrolled) {
+        await settle(page);
+        await page.screenshot({ path: path.join(auditShotsDir, `complete-${viewportName}-${state.name}-end.png`), fullPage: false });
+      }
+    }
+    for (const message of found) auditFindings.push(`${where}: ${message}`);
+    if (!auditReportOnly) assert.deepEqual(found, [], `${where}: layout audit`);
+    if (!auditReportOnly) assert.deepEqual(problems, [], `${where}: console health`);
+  } finally {
+    gate?.release();
+    await page.close();
+  }
+}
+
+// Behaviour of the expanded evidence sheet on phones: focus, Escape, the close
+// control, and the reader's scroll position coming back unchanged.
+async function runExpandedSheetFlow(browser, label, viewport) {
+  const page = await browser.newPage();
+  try {
+    await installApiMocks(page, { history: phoneLayoutHistory, answer: veryLongAnswer });
+    await page.setViewport(viewport);
+    await page.goto(appUrl, { waitUntil: "domcontentloaded" });
+    await page.waitForSelector('textarea[placeholder="Ask your textbooks…"]');
+    await ask(page, ordinaryQuestion, ".provider-result");
+    const state = () => page.evaluate(() => {
+      const sheet = document.querySelector(".evidence-panel");
+      const active = document.activeElement;
+      return {
+        scrollTop: document.querySelector(".answer-scroll").scrollTop,
+        expanded: sheet.classList.contains("mobile-expanded"),
+        focusInSheet: Boolean(active && sheet.contains(active)),
+        focusLabel: active ? (active.getAttribute("aria-label") || active.textContent || active.tagName).trim().slice(0, 40) : "",
+        pageInert: document.querySelector("main").inert === true && document.querySelector("header").inert === true,
+      };
+    });
+    const collapseVisible = () => page.evaluate(() => {
+      const button = [...document.querySelectorAll('.evidence-panel button[aria-label="Collapse evidence"]')].find((item) => item.getBoundingClientRect().width > 0);
+      if (!button) return false;
+      const rect = button.getBoundingClientRect();
+      const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+      return Boolean(hit && button.contains(hit)) && rect.top >= 0 && rect.bottom <= window.innerHeight;
+    });
+    // Scroll so the citation buttons and the evidence button are both on screen, then remember the position.
+    await page.evaluate(() => { document.querySelector(".answer-article .show-evidence").scrollIntoView({ block: "center" }); });
+    const before = (await state()).scrollTop;
+    assert.ok(before > 50, `${label}: the answer was scrolled before opening the sheet (${before})`);
+
+    // Open from a citation, close with Escape.
+    await page.$eval(".citation-controls button", (button) => button.focus({ preventScroll: true }));
+    await page.click(".citation-controls button");
+    await page.waitForSelector(".evidence-panel.mobile-expanded");
+    await settle(page);
+    let now = await state();
+    assert.ok(now.focusInSheet, `${label}: focus moves into the expanded sheet (focus is on "${now.focusLabel}")`);
+    assert.ok(now.pageInert, `${label}: the page behind the expanded sheet is inert`);
+    assert.ok(await collapseVisible(), `${label}: the close control is visible and reachable`);
+    await page.keyboard.press("Escape");
+    await page.waitForFunction(() => !document.querySelector(".evidence-panel.mobile-expanded"));
+    await page.waitForFunction(() => !document.querySelector(".evidence-panel").contains(document.activeElement));
+    await settle(page);
+    now = await state();
+    assert.equal(now.scrollTop, before, `${label}: Escape returns to the same scroll position`);
+    assert.equal(now.pageInert, false, `${label}: the page is live again after closing`);
+    assert.match(now.focusLabel, /Open citation 1/, `${label}: focus returns to the citation that opened the sheet`);
+
+    // Open from the evidence button, close with the close control.
+    await page.click(".answer-article .show-evidence");
+    await page.waitForSelector(".evidence-panel.mobile-expanded");
+    await settle(page);
+    now = await state();
+    assert.ok(now.focusInSheet, `${label}: focus moves into the sheet when opened from the evidence button`);
+    const closeButton = await page.evaluateHandle(() => [...document.querySelectorAll('.evidence-panel button[aria-label="Collapse evidence"]')].find((item) => item.getBoundingClientRect().width > 0));
+    await closeButton.asElement().click();
+    await page.waitForFunction(() => !document.querySelector(".evidence-panel.mobile-expanded"));
+    await page.waitForFunction(() => !document.querySelector(".evidence-panel").contains(document.activeElement));
+    await settle(page);
+    now = await state();
+    assert.equal(now.scrollTop, before, `${label}: the close control returns to the same scroll position`);
+    assert.match(now.focusLabel, /Show textbook evidence/, `${label}: focus returns to the evidence button (focus is on "${now.focusLabel}")`);
+
+    // Inside the sheet: a page view can be left again, and the composer is not over the sheet.
+    await page.click(".answer-article .show-evidence");
+    await page.waitForSelector(".evidence-panel.mobile-expanded");
+    await page.click('.evidence-panel [role="tab"]:first-child');
+    await page.waitForSelector(".open-page");
+    await page.click(".open-page");
+    await page.waitForSelector(".pdf-view");
+    const tabs = await page.evaluate(() => {
+      const tab = [...document.querySelectorAll('.evidence-panel [role="tab"]')].find((item) => item.textContent.trim() === "Evidence");
+      if (!tab || tab.getBoundingClientRect().width === 0) return false;
+      const rect = tab.getBoundingClientRect();
+      const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+      return Boolean(hit && tab.contains(hit));
+    });
+    assert.ok(tabs, `${label}: the Evidence tab is reachable from the page view`);
+    await page.click('.evidence-panel [role="tab"]:first-child');
+    await page.waitForSelector(".evidence-list");
+    const composerCovered = await page.evaluate(() => {
+      const rect = document.querySelector(".composer textarea").getBoundingClientRect();
+      const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+      return Boolean(hit && document.querySelector(".evidence-panel").contains(hit));
+    });
+    assert.ok(composerCovered, `${label}: the composer does not float over the expanded sheet`);
+    await page.keyboard.press("Escape");
+    await page.waitForFunction(() => !document.querySelector(".evidence-panel.mobile-expanded"));
+    await page.waitForFunction(() => !document.querySelector(".evidence-panel").contains(document.activeElement));
+    assert.equal((await state()).scrollTop, before, `${label}: scroll position is still the same after viewing a page`);
   } finally {
     await page.close();
   }
@@ -656,12 +1198,13 @@ function windowIsMobile(page) {
 
 async function main() {
   await mkdir(artifactDir, { recursive: true });
+  if (auditShotsDir) await mkdir(auditShotsDir, { recursive: true });
   const server = startVite();
   let browser;
   try {
     await waitForVite(server);
     browser = await puppeteer.launch({ headless: true, userDataDir: path.join(artifactDir, "browser-profile") });
-    for (const { name, viewport } of viewports) {
+    for (const { name, viewport } of viewports.filter((item) => !process.env.E2E_ONLY || item.name === process.env.E2E_ONLY)) {
       const page = await browser.newPage();
       const consoleErrors = [];
       const httpErrors = [];
@@ -676,12 +1219,21 @@ async function main() {
       try {
         await loadApp(page, name, viewport);
         await assertHistoryList(page, name);
-        await page.screenshot({ path: path.join(artifactDir, `${name}-initial.png`), fullPage: false });
+        await shot(page, `${name}-initial.png`);
         await runHistoryFlow(page, name, viewport.isMobile === true);
         await runScopeFlow(page, name);
         await runSelectAllFlow(page, name, mockState);
-        await page.screenshot({ path: path.join(artifactDir, `${name}-select-all.png`), fullPage: false });
+        await shot(page, `${name}-select-all.png`);
         if (viewport.isMobile === true) await runPhoneLayoutFlow(browser, name, viewport);
+        if (viewport.isMobile === true) {
+          try {
+            await runExpandedSheetFlow(browser, name, viewport);
+          } catch (error) {
+            if (!auditReportOnly) throw error;
+            auditFindings.push(`${name} / expanded sheet behaviour: ${String(error.message).split("\n")[0]}`);
+          }
+        }
+        for (const state of auditStates) await runAuditState(browser, name, viewport, state);
         assert.deepEqual(httpErrors, [], `${name}: HTTP health`);
         assert.deepEqual(consoleErrors, [], `${name}: console health`);
         process.stdout.write(`PASS ${name}\n`);
@@ -690,6 +1242,9 @@ async function main() {
       }
     }
     process.stdout.write(`Puppeteer artifacts: ${artifactDir}\n`);
+    if (auditReportOnly) {
+      process.stdout.write(`${auditFindings.length} layout findings\n${auditFindings.join("\n")}\n`);
+    }
   } finally {
     if (browser) await browser.close();
     if (server.exitCode === null) server.kill();

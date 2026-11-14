@@ -1,4 +1,4 @@
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ApiError, clearConversations, deleteConversation, getConversation, getConversations, getHealth, getSources, queryTextbooks } from "./api";
 import { FALLBACK_SOURCES } from "./catalog";
 import { AnswerView } from "./components/AnswerView";
@@ -11,6 +11,22 @@ import type { Answer, AnswerStatus, ConversationSummary, Evidence, ProviderChoic
 
 type DeleteTarget = ConversationSummary | "all" | undefined;
 type LocalModelHealthState = "checking" | "configured" | "unavailable";
+
+const PHONE_QUERY = "(max-width: 760px)";
+
+function useMediaQuery(query: string): boolean {
+  const read = () => typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia(query).matches;
+  const [matches, setMatches] = useState(read);
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+    const list = window.matchMedia(query);
+    const update = () => setMatches(list.matches);
+    update();
+    list.addEventListener("change", update);
+    return () => list.removeEventListener("change", update);
+  }, [query]);
+  return matches;
+}
 
 function scopeLabel(courseIds: string[], sourceIds: string[], sources: Source[]): string {
   if (!courseIds.length && !sourceIds.length) return "All textbooks";
@@ -40,6 +56,14 @@ export default function App() {
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget>();
   const [deleting, setDeleting] = useState(false);
   const [localModelHealth, setLocalModelHealth] = useState<LocalModelHealthState>("checking");
+  const isPhone = useMediaQuery(PHONE_QUERY);
+  // On a phone the expanded evidence sheet is a full-height layer over the whole page.
+  const phoneEvidenceOpen = isPhone && evidenceVisible && mobileEvidenceExpanded;
+  const answerPaneRef = useRef<HTMLDivElement>(null);
+  const evidencePanelRef = useRef<HTMLElement>(null);
+  const evidenceOpenerRef = useRef<HTMLElement | null>(null);
+  const answerScrollRef = useRef(0);
+  const sheetWasOpenRef = useRef(false);
 
   const refreshConversations = useCallback(async () => {
     try { setConversations(await getConversations()); } catch { /* History remains usable as an empty local view while the API starts. */ }
@@ -58,6 +82,30 @@ export default function App() {
     const timer = window.setTimeout(() => setLoadingStep(`Reading with ${provider === "auto" ? "NVIDIA first" : provider === "nvidia" ? "NVIDIA" : "Ollama"}…`), 900);
     return () => window.clearTimeout(timer);
   }, [provider, status]);
+
+  // Remember where the reader was before the sheet opened (focus and scroll position).
+  useLayoutEffect(() => {
+    if (!phoneEvidenceOpen) return;
+    evidenceOpenerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    answerScrollRef.current = answerPaneRef.current?.scrollTop ?? 0;
+  }, [phoneEvidenceOpen]);
+
+  // Move focus into the sheet, let Escape close it, and give the reader back focus and scroll position.
+  useLayoutEffect(() => {
+    if (phoneEvidenceOpen) {
+      sheetWasOpenRef.current = true;
+      evidencePanelRef.current?.focus({ preventScroll: true });
+      const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") setMobileEvidenceExpanded(false); };
+      document.addEventListener("keydown", onKey);
+      return () => document.removeEventListener("keydown", onKey);
+    }
+    if (sheetWasOpenRef.current) {
+      sheetWasOpenRef.current = false;
+      if (answerPaneRef.current) answerPaneRef.current.scrollTop = answerScrollRef.current;
+      const opener = evidenceOpenerRef.current;
+      if (opener?.isConnected) opener.focus({ preventScroll: true });
+    }
+  }, [phoneEvidenceOpen]);
 
   const selectedScope = useMemo(() => scopeLabel(courseIds, sourceIds, sources), [courseIds, sourceIds, sources]);
 
@@ -151,7 +199,7 @@ export default function App() {
 
   return (
     <div className="app-shell">
-      <header className="topbar">
+      <header className="topbar" inert={phoneEvidenceOpen}>
         <button className="icon-button mobile-only" onClick={() => setHistoryOpen(true)} aria-label="Open history"><MenuIcon /></button>
         <a className="brand" href="/textbooks/" onClick={(event) => { event.preventDefault(); reset(); }}>Textbook Desk</a>
         <button type="button" className="scope-top desktop-only" onClick={() => setScopeOpen(true)} aria-expanded={scopeOpen} aria-label={`Textbook scope: ${selectedScope}`}><BookIcon /><span>{selectedScope}</span><ChevronIcon className="chevron-down" /></button>
@@ -162,8 +210,10 @@ export default function App() {
 
       <div className={`workspace ${evidenceVisible ? "has-evidence" : ""}`}>
         <HistoryRail conversations={conversations} selectedId={selectedConversationId} mobileOpen={historyOpen} onSelect={openConversation} onDelete={setDeleteTarget} onClear={() => setDeleteTarget("all")} onCloseMobile={() => setHistoryOpen(false)} />
-        <main className="answer-pane">
-          <AnswerView status={status} answer={answer} loadingQuestion={loadingQuestion} loadingStep={loadingStep} onCitation={openCitation} onShowEvidence={() => { setEvidenceVisible(true); setMobileEvidenceExpanded(true); }} />
+        <main className="answer-pane" inert={phoneEvidenceOpen}>
+          <div className="answer-scroll" ref={answerPaneRef}>
+            <AnswerView status={status} answer={answer} loadingQuestion={loadingQuestion} loadingStep={loadingStep} onCitation={openCitation} onShowEvidence={() => { setEvidenceVisible(true); setMobileEvidenceExpanded(true); }} />
+          </div>
           <form className="composer" onSubmit={submit} aria-label="Ask your textbooks">
             <div className="privacy-note"><span aria-hidden="true">◇</span> Answers stay inside your textbooks</div>
             <div className="composer-box">
@@ -183,7 +233,7 @@ export default function App() {
             </div>
           </form>
         </main>
-        {evidenceVisible && answer?.evidence && <EvidencePanel evidence={answer.evidence} activeEvidence={activeEvidence} mobileExpanded={mobileEvidenceExpanded} onMobileExpanded={setMobileEvidenceExpanded} onActiveEvidence={setActiveEvidence} onCloseDesktop={() => setEvidenceVisible(false)} />}
+        {evidenceVisible && answer?.evidence && <EvidencePanel evidence={answer.evidence} activeEvidence={activeEvidence} mobileExpanded={mobileEvidenceExpanded} modal={phoneEvidenceOpen} panelRef={evidencePanelRef} onMobileExpanded={setMobileEvidenceExpanded} onActiveEvidence={setActiveEvidence} onCloseDesktop={() => setEvidenceVisible(false)} />}
       </div>
 
       <ConfirmDialog open={Boolean(deleteTarget)} title={deleteTarget === "all" ? "Clear all question history?" : `Delete “${deleteTarget?.title}”?`} description={deleteTarget === "all" ? "This permanently removes every saved conversation from local history. Your textbook index and original PDFs will not be changed." : "This permanently removes this conversation from local history. Your textbook index and original PDFs will not be changed."} confirmLabel={deleteTarget === "all" ? "Clear all history" : "Delete question"} busy={deleting} onConfirm={confirmDelete} onClose={() => setDeleteTarget(undefined)} />

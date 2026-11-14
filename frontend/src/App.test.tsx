@@ -84,6 +84,44 @@ describe("Textbook Desk", () => {
     expect(JSON.parse(String(queryCall?.[1]?.body))).toMatchObject({ provider: "ollama", question: "Why is semantic HTML important?" });
   });
 
+  it("makes the expanded evidence sheet a modal layer on phones that Escape closes", async () => {
+    const original = window.matchMedia;
+    window.matchMedia = (() => ({ matches: true, addEventListener: () => undefined, removeEventListener: () => undefined })) as unknown as typeof window.matchMedia;
+    try {
+      mockApi({
+        status: "answered",
+        answer: "Semantic HTML describes purpose, not appearance. [1]",
+        actual_provider: "ollama",
+        fallback_used: false,
+        conversation_id: "conv-1",
+        citations: [{ id: "1", evidence_id: "chunk-1" }],
+        evidence: [{ id: "chunk-1", source_id: "web-development", source_title: "Introduction to Web Development", physical_page: 64, excerpt: "Semantic elements describe meaning.", rank: 1 }],
+      });
+      const user = userEvent.setup();
+      const { container } = render(<App />);
+      await user.type(screen.getByPlaceholderText("Ask your textbooks…"), "Why is semantic HTML important?");
+      await user.click(screen.getByRole("button", { name: "Ask question" }));
+      await screen.findByText(/Semantic HTML describes purpose/);
+      expect(container.querySelector("main")).not.toHaveAttribute("inert");
+      expect(screen.queryByRole("dialog", { name: "Textbook evidence" })).toBeNull();
+
+      const opener = screen.getByRole("button", { name: "Open citation 1, Introduction to Web Development, page 64" });
+      await user.click(opener);
+      const sheet = await screen.findByRole("dialog", { name: "Textbook evidence" });
+      expect(sheet).toHaveAttribute("aria-modal", "true");
+      expect(sheet).toHaveFocus();
+      expect(container.querySelector("main")).toHaveAttribute("inert");
+      expect(container.querySelector("header")).toHaveAttribute("inert");
+
+      await user.keyboard("{Escape}");
+      await waitFor(() => expect(screen.queryByRole("dialog", { name: "Textbook evidence" })).toBeNull());
+      expect(container.querySelector("main")).not.toHaveAttribute("inert");
+      expect(opener).toHaveFocus();
+    } finally {
+      window.matchMedia = original;
+    }
+  });
+
   it("submits select-all mode and makes the returned answer mode explicit", async () => {
     const fetchMock = mockApi({
       status: "ok",
