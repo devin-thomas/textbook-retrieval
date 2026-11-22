@@ -2,21 +2,20 @@
 
 Set-StrictMode -Version Latest
 
-function Get-TailscaleServeMappingTarget {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory = $true)][string]$Status,
-        [Parameter(Mandatory = $true)][ValidatePattern('^/(?:[A-Za-z0-9._~-]+/)*[A-Za-z0-9._~-]*$')][string]$Path
-    )
-
-    $pathPattern = [regex]::Escape($Path)
-    $pattern = "(?m)^\s*\|--\s+$pathPattern\s+proxy\s+(\S+)\s*$"
-    $matches = [regex]::Matches($Status, $pattern)
-    if ($matches.Count -gt 1) {
-        throw "Tailscale Serve status contains more than one mapping for '$Path'."
+# The Serve logic is the TailscaleServe module from the public ps-kit repository
+# (https://github.com/uppercut-labs/ps-kit, packages/tailscale-serve). Install it by copying the
+# TailscaleServe folder into a folder on $env:PSModulePath, or set PS_KIT to a clone of ps-kit.
+if (-not (Get-Command Get-TsServeMappingTarget -ErrorAction SilentlyContinue)) {
+    $psKitManifest = if ($env:PS_KIT) { Join-Path $env:PS_KIT 'packages/tailscale-serve/TailscaleServe/TailscaleServe.psd1' } else { '' }
+    if (Get-Module -ListAvailable -Name TailscaleServe) {
+        Import-Module TailscaleServe -MinimumVersion 0.1.0 -ErrorAction Stop
     }
-    if ($matches.Count -eq 0) { return $null }
-    return $matches[0].Groups[1].Value
+    elseif ($psKitManifest -and (Test-Path -LiteralPath $psKitManifest)) {
+        Import-Module $psKitManifest -ErrorAction Stop
+    }
+    else {
+        throw 'The TailscaleServe module was not found. Copy packages/tailscale-serve/TailscaleServe from https://github.com/uppercut-labs/ps-kit into a folder on $env:PSModulePath, or set PS_KIT to a clone of that repository.'
+    }
 }
 
 function Get-TailscaleServeHealthChecks {
@@ -37,7 +36,7 @@ function Get-TailscaleServeHealthChecks {
 
     foreach ($mapping in $mappings) {
         try {
-            $actual = Get-TailscaleServeMappingTarget -Status $Status -Path $mapping.Path
+            $actual = Get-TsServeMappingTarget -StatusText $Status -Path $mapping.Path
             $observed = if ($actual) { $actual } else { '<absent>' }
             [pscustomobject]@{
                 Check = $mapping.Name

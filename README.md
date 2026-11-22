@@ -24,7 +24,7 @@ The app serves its UI and API under the `/textbooks` path (for example `http://1
   - `qwen3-embedding:4b` (embeddings, required for semantic retrieval)
   - `qwen3.5:9b` (answers when the Ollama provider is used)
 - Optional: an NVIDIA API key from [build.nvidia.com](https://build.nvidia.com) for the NVIDIA provider.
-- Optional, for the scripts in `scripts/`: Windows with Windows PowerShell 5.1, the OpenSSH client, and the Tailscale CLI.
+- Optional, for the scripts in `scripts/`: Windows with Windows PowerShell 5.1, the OpenSSH client, the Tailscale CLI, and the `TailscaleServe` PowerShell module from [ps-kit](https://github.com/uppercut-labs/ps-kit) (copy `packages/tailscale-serve/TailscaleServe` into a folder on `$env:PSModulePath`, or set `PS_KIT` to a clone of that repository).
 
 Model names, the embedding dimension and the endpoints can all be changed in `.env`.
 
@@ -139,7 +139,7 @@ tailscale serve --bg --https=443 --set-path=/textbooks http://127.0.0.1:8766/tex
 
 The app is then at `https://<machine>.<tailnet>.ts.net/textbooks/`. Remove the mapping with `tailscale serve --https=443 --set-path=/textbooks off`.
 
-On Windows, `.\scripts\Manage-TailscaleServe.ps1 -Action Install` (or `Inspect`, `Rollback`) does this and changes only the `/textbooks` path: it records any existing root (`/`) mapping first and fails if that mapping is different afterwards.
+On Windows, `.\scripts\Manage-TailscaleServe.ps1 -Action Install` (or `Inspect`, `Rollback`) does this and changes only the `/textbooks` path: the module reads the configuration back afterwards and fails if any other mapping, the root included, changed or if Funnel is on. `-RequireRoot 'http://127.0.0.1:<port>'` refuses to install unless the root maps to that target.
 
 `.\scripts\Test-Deployment.ps1 -TailnetUrl 'https://<machine>.<tailnet>.ts.net'` checks the loopback listeners, both scheduled tasks, the Serve mapping, the local health and UI endpoints, the Ollama tunnel and the tailnet URL, and prints a PASS/FAIL table. If another app is served at `/` on the same machine, add `-RootTarget 'http://127.0.0.1:<port>'` to check that it is still mapped and reachable. `reports/templates/deployment-validation.md` is a checklist for recording a deployment check.
 

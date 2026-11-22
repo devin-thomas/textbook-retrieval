@@ -4,86 +4,48 @@
 param(
     [Parameter(Mandatory = $true)]
     [ValidateSet('Install', 'Inspect', 'Rollback')]
-    [string]$Action
+    [string]$Action,
+
+    # Refuse to act unless the root (/) path proxies to this target. Without it, any existing root
+    # mapping is left alone and must be unchanged afterwards.
+    [string]$RequireRoot = ''
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
+# Imports the TailscaleServe module from ps-kit (see TailscaleServeStatus.ps1).
 . (Join-Path $PSScriptRoot 'TailscaleServeStatus.ps1')
 
-$tailscale = Get-Command tailscale.exe -ErrorAction SilentlyContinue
-if (-not $tailscale) { $tailscale = Get-Command tailscale -ErrorAction SilentlyContinue }
-if (-not $tailscale) { throw 'Tailscale CLI is required and was not found on PATH.' }
-
+$textbookPath = '/textbooks'
 $textbookTarget = 'http://127.0.0.1:8766/textbooks'
 
-function Get-ServeStatusText {
-    $output = & $tailscale.Source serve status 2>&1
-    if ($LASTEXITCODE -ne 0) { throw "tailscale serve status failed: $($output -join [Environment]::NewLine)" }
-    return ($output -join [Environment]::NewLine)
+function Write-ServeMappings {
+    Write-Output ((Get-TsServePath | Format-Table HostPort, Mount, Kind, Target -AutoSize | Out-String).TrimEnd())
 }
 
-function Assert-RootUnchanged {
-    param(
-        [Parameter(Mandatory = $true)][string]$Status,
-        [AllowNull()][AllowEmptyString()][string]$ExpectedRootTarget
-    )
-    $actualRootTarget = Get-TailscaleServeMappingTarget -Status $Status -Path '/'
-    if ([string]$actualRootTarget -ne [string]$ExpectedRootTarget) {
-        $expected = if ($ExpectedRootTarget) { $ExpectedRootTarget } else { '<absent>' }
-        $observed = if ($actualRootTarget) { $actualRootTarget } else { '<absent>' }
-        throw "The root mapping changed from '/ -> $expected' to '/ -> $observed'. Inspect the Serve configuration before continuing."
-    }
-}
-
-$before = Get-ServeStatusText
+# Only /textbooks is managed here. The module reads the configuration back after each change and
+# fails if the mapping is not as asked, Funnel is on, or any other mapping on the port changed.
 if ($Action -eq 'Inspect') {
-    Write-Output $before
+    Write-ServeMappings
     return
 }
 
-# Only /textbooks is managed here. Any existing root (/) mapping is recorded
-# first and must be identical afterwards.
-$beforeRootTarget = Get-TailscaleServeMappingTarget -Status $before -Path '/'
-$beforeTextbookTarget = Get-TailscaleServeMappingTarget -Status $before -Path '/textbooks'
-
 if ($Action -eq 'Install') {
-    if ($beforeTextbookTarget -eq $textbookTarget) {
-        Write-Host "The /textbooks mapping is already configured for $textbookTarget."
-        return
-    }
-    if ($PSCmdlet.ShouldProcess('/textbooks', "Mount Tailscale Serve path to $textbookTarget")) {
-        & $tailscale.Source serve --bg --yes --https=443 --set-path=/textbooks $textbookTarget
-        if ($LASTEXITCODE -ne 0) { throw "Tailscale Serve path installation failed with exit code $LASTEXITCODE" }
-
-        $after = Get-ServeStatusText
-        Assert-RootUnchanged -Status $after -ExpectedRootTarget $beforeRootTarget
-        $afterTextbookTarget = Get-TailscaleServeMappingTarget -Status $after -Path '/textbooks'
-        if ($afterTextbookTarget -ne $textbookTarget) {
-            $observed = if ($afterTextbookTarget) { $afterTextbookTarget } else { '<absent>' }
-            throw "Tailscale accepted the command, but '/textbooks -> $textbookTarget' was not confirmed (observed '$observed')."
-        }
-        Write-Output $after
+    $arguments = @{ Path = $textbookPath; Target = $textbookTarget }
+    if ($RequireRoot) { $arguments.RequireRoot = $RequireRoot }
+    $result = Add-TsServePath @arguments
+    if ($result) {
+        Write-Host "The $textbookPath mapping: $($result.Action) ($($result.Target))."
+        Write-ServeMappings
     }
     return
 }
 
 if ($Action -eq 'Rollback') {
-    if (-not $beforeTextbookTarget) {
-        Write-Host 'The Textbook Desk /textbooks mapping is already absent.'
-        return
-    }
-    if ($PSCmdlet.ShouldProcess('/textbooks', 'Remove only the Textbook Desk Tailscale Serve path')) {
-        & $tailscale.Source serve --https=443 --set-path=/textbooks off
-        if ($LASTEXITCODE -ne 0) { throw "Tailscale Serve rollback failed with exit code $LASTEXITCODE" }
-
-        $after = Get-ServeStatusText
-        Assert-RootUnchanged -Status $after -ExpectedRootTarget $beforeRootTarget
-        $afterTextbookTarget = Get-TailscaleServeMappingTarget -Status $after -Path '/textbooks'
-        if ($afterTextbookTarget) {
-            throw "The /textbooks mapping is still present after rollback (target '$afterTextbookTarget')."
-        }
-        Write-Output $after
+    $result = Remove-TsServePath -Path $textbookPath
+    if ($result) {
+        Write-Host "The Textbook Desk $textbookPath mapping: $($result.Action)."
+        Write-ServeMappings
     }
 }

@@ -18,8 +18,8 @@ https://apphost.example.ts.net (tailnet only)
 |-- / proxy http://127.0.0.1:8080
 |-- /textbooks proxy http://127.0.0.1:8766/textbooks
 '@
-Assert-Equal (Get-TailscaleServeMappingTarget -Status $validStatus -Path '/') 'http://127.0.0.1:8080' 'root mapping'
-Assert-Equal (Get-TailscaleServeMappingTarget -Status $validStatus -Path '/textbooks') 'http://127.0.0.1:8766/textbooks' 'textbook mapping'
+Assert-Equal (Get-TsServeMappingTarget -StatusText $validStatus -Path '/') 'http://127.0.0.1:8080' 'root mapping'
+Assert-Equal (Get-TsServeMappingTarget -StatusText $validStatus -Path '/textbooks') 'http://127.0.0.1:8766/textbooks' 'textbook mapping'
 $rootTarget = 'http://127.0.0.1:8080'
 $validChecks = @(Get-TailscaleServeHealthChecks -Status $validStatus -ExpectedRootTarget $rootTarget)
 Assert-Equal $validChecks.Count 2 'valid mapping check count'
@@ -35,8 +35,8 @@ https://apphost.example.ts.net (tailnet only)
 |-- /textbooks proxy http://127.0.0.1:9999/stale
 |-- /other proxy http://127.0.0.1:8766/textbooks
 '@
-Assert-Equal (Get-TailscaleServeMappingTarget -Status $staleStatus -Path '/textbooks') 'http://127.0.0.1:9999/stale' 'stale mapping cannot borrow another path target'
-Assert-Equal (Get-TailscaleServeMappingTarget -Status $staleStatus -Path '/other') 'http://127.0.0.1:8766/textbooks' 'other mapping'
+Assert-Equal (Get-TsServeMappingTarget -StatusText $staleStatus -Path '/textbooks') 'http://127.0.0.1:9999/stale' 'stale mapping cannot borrow another path target'
+Assert-Equal (Get-TsServeMappingTarget -StatusText $staleStatus -Path '/other') 'http://127.0.0.1:8766/textbooks' 'other mapping'
 $staleChecks = @(Get-TailscaleServeHealthChecks -Status $staleStatus -ExpectedRootTarget $rootTarget)
 Assert-Equal $staleChecks[0].Result 'PASS' 'stale status root remains valid'
 Assert-Equal $staleChecks[1].Result 'FAIL' 'stale textbook target is unhealthy'
@@ -46,7 +46,7 @@ https://apphost.example.ts.net (tailnet only)
 |-- / proxy http://127.0.0.1:8080
 |-- /other proxy http://127.0.0.1:8766/textbooks
 '@
-Assert-Equal (Get-TailscaleServeMappingTarget -Status $borrowedTargetStatus -Path '/textbooks') $null 'target URL under another path is not a textbook mapping'
+Assert-Equal (Get-TsServeMappingTarget -StatusText $borrowedTargetStatus -Path '/textbooks') $null 'target URL under another path is not a textbook mapping'
 $borrowedChecks = @(Get-TailscaleServeHealthChecks -Status $borrowedTargetStatus -ExpectedRootTarget $rootTarget)
 Assert-Equal $borrowedChecks[1].Result 'FAIL' 'borrowed target is not healthy'
 
@@ -54,7 +54,7 @@ $absentStatus = @'
 https://apphost.example.ts.net (tailnet only)
 |-- / proxy http://127.0.0.1:8080
 '@
-Assert-Equal (Get-TailscaleServeMappingTarget -Status $absentStatus -Path '/textbooks') $null 'absent mapping'
+Assert-Equal (Get-TsServeMappingTarget -StatusText $absentStatus -Path '/textbooks') $null 'absent mapping'
 
 $duplicateStatus = @'
 https://apphost.example.ts.net (tailnet only)
@@ -63,7 +63,7 @@ https://apphost.example.ts.net (tailnet only)
 '@
 $duplicateRejected = $false
 try {
-    [void](Get-TailscaleServeMappingTarget -Status $duplicateStatus -Path '/textbooks')
+    [void](Get-TsServeMappingTarget -StatusText $duplicateStatus -Path '/textbooks')
 }
 catch {
     $duplicateRejected = $true
