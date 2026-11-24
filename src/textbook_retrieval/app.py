@@ -267,9 +267,9 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
                     "kind": exc.kind,
                     "fallback_used": exc.fallback_used,
                     "initial_failure_kind": exc.initial_failure_kind,
-                    "conversation_id": exc.conversation_id,
-                    "user_message_id": exc.user_message_id,
-                    "assistant_message_id": exc.assistant_message_id,
+                    "conversation_id": exc.context.get("conversation_id"),
+                    "user_message_id": exc.context.get("user_message_id"),
+                    "assistant_message_id": exc.context.get("assistant_message_id"),
                 }
             },
         )
