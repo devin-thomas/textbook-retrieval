@@ -158,9 +158,11 @@ class QueryService:
                 failure=exc,
                 retrieval_fallback_used=retrieval.semantic_fallback_used,
             )
-            exc.conversation_id = conversation_id
-            exc.user_message_id = user_message_id
-            exc.assistant_message_id = assistant_message_id
+            exc.context.update(
+                conversation_id=conversation_id,
+                user_message_id=user_message_id,
+                assistant_message_id=assistant_message_id,
+            )
             raise
         assistant_message_id = self.history.append_assistant(
             conversation_id,
